@@ -12,8 +12,25 @@ import (
 	"unicode"
 )
 
-const chunkSize = 10
+var months = map[string]int{
+	"Jan": 0,
+	"Feb": 1,
+	"Mar": 2,
+	"Apr": 3,
+	"May": 4,
+	"Jun": 5,
+	"Jul": 6,
+	"Aug": 7,
+	"Sep": 8,
+	"Oct": 9,
+	"Nov": 10,
+	"Dec": 11,
+}
 
+// разделяет большой файл, чтобы сортировать по частям
+const chunkSize = 1024
+
+// получение нужного столбца
 func getCol(row string, col int) string {
 	cols := strings.Split(row, "\t")
 	if col-1 < len(cols) {
@@ -22,14 +39,138 @@ func getCol(row string, col int) string {
 	return ""
 }
 
-func mergeFiles(filesName []string) error {
+// перевод в байты, чтобы правильно сравнивать
+func parseHumanSize(s string) (float64, error) {
+	multipliers := map[byte]float64{
+		'K': 1024,
+		'M': 1024 * 1024,
+		'G': 1024 * 1024 * 1024,
+	}
+
+	n := len(s)
+	if n == 0 {
+		return 0, errors.New("пустая строка в определении размера")
+	}
+	multPart, ok := multipliers[s[n-1]]
+	var numPart string
+	if ok {
+		numPart = s[:n-1]
+	} else {
+		numPart = s
+		multPart = 1
+	}
+
+	val, err := strconv.ParseFloat(numPart, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val * multPart, nil
 
 }
 
-func compareRows(i, j int, rows []string, col int, flagMap map[string]bool) bool {
+func checkSorted(reader io.Reader, col int, flagMap map[string]bool) error {
+	scanner := bufio.NewScanner(reader)
+	var prev string
+	lineNum := 0
 
-	a := getCol(rows[i], col)
-	b := getCol(rows[j], col)
+	for scanner.Scan() {
+		lineNum++
+		current := scanner.Text()
+		if lineNum > 1 {
+			rows := []string{prev, current}
+			if !compareRows(0, 1, rows, col, flagMap) {
+				return fmt.Errorf("нарушен порядок в строке %d: %q > %q", lineNum, prev, current)
+			}
+		}
+		prev = current
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// объединение в один файл в отсортированном порядке
+func mergeFiles(filesName []string, col int, flagMap map[string]bool) error {
+	type fileRow struct {
+		row   string
+		index int
+	}
+	files := make([]*os.File, len(filesName))
+	scanners := make([]*bufio.Scanner, len(filesName))
+	for i, name := range filesName {
+		f, err := os.Open(name)
+		if err != nil {
+			return err
+		}
+		files[i] = f
+		scanners[i] = bufio.NewScanner(f)
+	}
+	defer func() {
+		for _, f := range files {
+			err := f.Close()
+			if err != nil {
+				fmt.Println(err)
+			}
+			err = os.Remove(f.Name())
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+	}()
+	heapRows := make([]fileRow, 0)
+	for i, s := range scanners {
+		if s.Scan() {
+			heapRows = append(heapRows, fileRow{s.Text(), i})
+		}
+	}
+
+	out := bufio.NewWriter(os.Stdout)
+
+	for len(heapRows) > 0 {
+		minIndex := 0
+		minRow := heapRows[0].row
+		for i, fr := range heapRows {
+
+			if compareRows(0, 1, []string{fr.row, minRow}, col, flagMap) {
+				minIndex = i
+				minRow = fr.row
+			}
+		}
+		_, err := fmt.Fprintln(out, heapRows[minIndex].row)
+		if err != nil {
+			return err
+		}
+		idx := heapRows[minIndex].index
+		if scanners[idx].Scan() {
+			heapRows[minIndex].row = scanners[idx].Text()
+		} else {
+			heapRows = append(heapRows[:minIndex], heapRows[minIndex+1:]...)
+		}
+	}
+	err := out.Flush()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// компаратор для сортировки с флагами
+func compareRows(i, j int, rows []string, col int, flagMap map[string]bool) bool {
+	var a string
+	var b string
+	if col != 0 {
+		a = getCol(rows[i], col)
+		b = getCol(rows[j], col)
+	} else {
+		a = rows[i]
+		b = rows[j]
+	}
+
+	if flagMap["hasB"] {
+		a = strings.TrimSpace(a)
+		b = strings.TrimSpace(b)
+	}
 
 	var cmp bool
 	if flagMap["hasN"] {
@@ -37,6 +178,25 @@ func compareRows(i, j int, rows []string, col int, flagMap map[string]bool) bool
 		vb, errB := strconv.ParseFloat(b, 64)
 		if errA == nil && errB == nil {
 			cmp = va < vb
+		} else {
+			cmp = a < b
+		}
+	} else if flagMap["hasH"] {
+		va, errA := parseHumanSize(a)
+		vb, errB := parseHumanSize(b)
+
+		if errA == nil && errB == nil {
+			cmp = va < vb
+		} else {
+			cmp = a < b
+		}
+
+	} else if flagMap["hasM"] {
+		monthA, ok1 := months[a]
+		monthB, ok2 := months[b]
+
+		if ok1 && ok2 {
+			cmp = monthA < monthB
 		} else {
 			cmp = a < b
 		}
@@ -70,16 +230,11 @@ func sortWithFlags(rows []string, col int, flagMap map[string]bool) []string {
 	return rows
 }
 
-func printResult(strs []string) {
-	for _, s := range strs {
-		fmt.Println(s)
-	}
-}
-
+// инициализация флагов и разбивка файла, если он слишком большой(настраивается через константу chunSize)
 func procces(flags []string, in io.Reader) error {
 
 	flagMap := make(map[string]bool)
-	column := 1
+	column := 0
 	var err error
 	if len(flags) != 0 {
 		for i := 1; i < len(flags[0]); i++ {
@@ -91,6 +246,14 @@ func procces(flags []string, in io.Reader) error {
 				flagMap["hasR"] = true
 			case 'u':
 				flagMap["hasU"] = true
+			case 'M':
+				flagMap["hasM"] = true
+			case 'b':
+				flagMap["hasB"] = true
+			case 'c':
+				flagMap["hasC"] = true
+			case 'h':
+				flagMap["hasH"] = true
 			case 'k':
 				if len(flags) < 2 {
 					return errors.New("ошибка: неверный аругмент -k")
@@ -101,6 +264,14 @@ func procces(flags []string, in io.Reader) error {
 				}
 			}
 		}
+	}
+
+	if flagMap["hasC"] {
+		err := checkSorted(in, column, flagMap)
+		if err != nil {
+			return err
+		}
+		return nil
 	}
 
 	scanner := bufio.NewScanner(in)
@@ -119,10 +290,20 @@ func procces(flags []string, in io.Reader) error {
 
 			w := bufio.NewWriter(tmpFile)
 			for _, s := range strs {
-				fmt.Fprintln(w, s)
+				_, err := fmt.Fprintln(w, s)
+				if err != nil {
+					return err
+				}
 			}
-			w.Flush()
-			tmpFile.Close()
+			err = w.Flush()
+			if err != nil {
+				return err
+			}
+
+			err = tmpFile.Close()
+			if err != nil {
+				return err
+			}
 
 			chunkFiles = append(chunkFiles, tmpFile.Name())
 			strs = make([]string, 0, chunkSize)
@@ -142,14 +323,21 @@ func procces(flags []string, in io.Reader) error {
 		}
 		w := bufio.NewWriter(tmpFile)
 		for _, line := range strs {
-			fmt.Fprintln(w, line)
+			_, err := fmt.Fprintln(w, line)
+			if err != nil {
+				return err
+			}
 		}
-		w.Flush()
-		tmpFile.Close()
+		err = w.Flush()
+		if err != nil {
+			return err
+		}
+		err = tmpFile.Close()
+		if err != nil {
+			return err
+		}
 		chunkFiles = append(chunkFiles, tmpFile.Name())
 	}
-
-	fmt.Println(chunkFiles)
 
 	if len(chunkFiles) == 0 {
 		return nil
@@ -159,14 +347,24 @@ func procces(flags []string, in io.Reader) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-		io.Copy(os.Stdout, f)
-		os.Remove(chunkFiles[0])
+		defer func() {
+			if err := f.Close(); err != nil {
+				fmt.Println(err)
+			}
+		}()
+
+		_, err = io.Copy(os.Stdout, f)
+		if err != nil {
+			return err
+		}
+		err = os.Remove(chunkFiles[0])
+		if err != nil {
+			return err
+		}
 		return nil
 	}
 
-	printResult(strs)
-	return nil
+	return mergeFiles(chunkFiles, column, flagMap)
 }
 
 func parseArgs(args []string) ([]string, io.Reader, error) {
