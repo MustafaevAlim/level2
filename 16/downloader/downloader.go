@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,8 +39,12 @@ func (d *Downloader) DownloadFile(basePath string, p string, in io.Reader) (stri
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() {
 
+		if err := file.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 	_, err = io.Copy(file, in)
 	if err != nil {
 		return "", err

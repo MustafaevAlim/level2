@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"wget/parser"
 )
@@ -8,7 +9,9 @@ import (
 // "https://pkg.go.dev/net/http@go1.25.1#example-Get"
 func main() {
 
-	p := parser.NewParserHTML(1, "https://go.dev/")
+	flagM := flag.Int("m", 0, "глубина скачивания ресурса")
+	flag.Parse()
+	p := parser.NewParserHTML(*flagM, flag.Args()[0])
 	err := p.Parse()
 	if err != nil {
 		fmt.Println(err)

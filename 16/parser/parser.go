@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -113,14 +112,17 @@ func (p *ParserHTML) parse(u string, currentDepth int) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 
 	basePath := p.d.GetBasePath(normURL)
 
 	filename, err := p.d.DownloadFile(basePath, p.d.GetPath(normURL), res.Body)
 	if err != nil {
-		fmt.Println(p.d.GetPath(normURL))
-		log.Println(err)
+
 		return err
 	}
 
@@ -133,7 +135,11 @@ func (p *ParserHTML) parse(u string, currentDepth int) error {
 		if err != nil {
 			return err
 		}
-		defer in.Close()
+		defer func() {
+			if err := in.Close(); err != nil {
+				log.Println(err)
+			}
+		}()
 
 		links, err := p.FindAllLink(in)
 		if err != nil {
@@ -158,7 +164,7 @@ func (p *ParserHTML) parse(u string, currentDepth int) error {
 }
 
 func (p *ParserHTML) FindAllLink(in io.ReadCloser) ([]string, error) {
-	defer in.Close()
+
 	links := make([]string, 0)
 
 	node, err := html.Parse(in)
@@ -191,7 +197,6 @@ func (p *ParserHTML) FindAllLink(in io.ReadCloser) ([]string, error) {
 		}
 	}
 	walker(node)
-	log.Println(len(links))
 	return links, nil
 }
 
@@ -200,7 +205,11 @@ func (p *ParserHTML) UpdateLinks(htmlFilename string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 
 	doc, err := html.Parse(f)
 	if err != nil {
@@ -244,7 +253,11 @@ func (p *ParserHTML) UpdateLinks(htmlFilename string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if err := out.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
 
 	return html.Render(out, doc)
 }
