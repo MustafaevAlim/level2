@@ -15,12 +15,12 @@ import (
 )
 
 type ParserHTML struct {
-	visitedURL map[string]struct{}
 	maxDepth   int
 	d          *downloader.Downloader
 	host       string
 	u          string
 	urlToLocal map[string]string
+	visitedURL map[string]struct{}
 }
 
 func normalizeURL(rawurl string) (string, error) {

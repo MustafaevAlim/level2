@@ -9,20 +9,14 @@ import (
 )
 
 type Downloader struct {
-	BasePath string
-	Path     string
-}
-
-// / пока не нужна
-func (d *Downloader) CreateDirectoryFromPath(p []string) error {
-	return os.MkdirAll(strings.Join(p, string(os.PathSeparator)), 0755)
+	Path string
 }
 
 func (d *Downloader) DownloadFile(basePath string, p string, in io.Reader) (string, error) {
 	defaultName := "index.html"
 	path := p
 	if !strings.Contains(p, basePath) {
-		path = d.BasePath + "/" + path
+		path = basePath + "/" + path
 	}
 
 	if strings.HasSuffix(path, string(os.PathSeparator)) || path == "" {
@@ -71,7 +65,6 @@ func (d *Downloader) GetBasePath(u string) string {
 
 func NewDownloader(u string) Downloader {
 	d := Downloader{}
-	d.BasePath = d.GetBasePath(u)
 	d.Path = u
 	return d
 }
